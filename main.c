@@ -9,18 +9,18 @@ MODULE_AUTHOR("Apriorit, Inc");
 /*===============================================================================================*/
 static int simple_driver_init(void)
 {
-    int result = 0;
-    printk( KERN_NOTICE "Simple-driver: Initialization started\n" );
+	int result = 0;
+	printk( KERN_NOTICE "Simple-driver: Initialization started\n" );
 
-    result = register_device();
-    return result;
+	result = register_device();
+	return result;
 }
 
 /*===============================================================================================*/
 static void simple_driver_exit(void)
 {
-    printk( KERN_NOTICE "Simple-driver: Exiting\n" );
-    unregister_device();
+	printk( KERN_NOTICE "Simple-driver: Exiting\n" );
+	unregister_device();
 }
 
 /*===============================================================================================*/
