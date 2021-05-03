@@ -1,1 +1,0 @@
-cmd_/home/yaoxin/kernelDep/simpleDeviceDriver/Module.symvers := sed 's/\.ko$$/\.o/' /home/yaoxin/kernelDep/simpleDeviceDriver/modules.order | scripts/mod/modpost -m -a   -o /home/yaoxin/kernelDep/simpleDeviceDriver/Module.symvers -e -i Module.symvers   -T -

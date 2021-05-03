@@ -1,1 +1,0 @@
-cmd_/home/yaoxin/kernelDep/simpleDeviceDriver/modules.order := {   echo /home/yaoxin/kernelDep/simpleDeviceDriver/simple-module.ko; :; } | awk '!x[$$0]++' - > /home/yaoxin/kernelDep/simpleDeviceDriver/modules.order
