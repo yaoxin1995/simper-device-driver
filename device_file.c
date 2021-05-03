@@ -1,23 +1,22 @@
-#include <linux/slab.h>    /*kmalloc*/
+#include <linux/slab.h>		/*kmalloc*/
 #include <linux/fs.h>   /* file stuff */
 #include <linux/kernel.h>   /* printk() */
 #include <linux/errno.h>    /* error codes */
 #include <linux/module.h>   /* THIS_MODULE */
 #include <linux/cdev.h>     /* char device stuff */
 #include <linux/uaccess.h>  /* copy_to_user() */
-
+#include <linux/mutex.h>
 #include "device_file.h"  //local header file shoudl behind the header file in kernel
 
 
 dev_t dev;
 static struct class *dev_class;
 static struct cdev etx_cdev;
-
-
-
+static loff_t max_offset;  //max. offset of the device file,track the end of the file
 struct xarray key_value_store;
+struct mutex my_mutex;   // mutex for max_offset
 
-unsigned long next_index; //next posible index in the key_value_store
+//unsigned long next_index; //next posible index in the key_value_store
 
 
 // void key_value_store_init(struct xarray *array);
@@ -29,23 +28,26 @@ unsigned long next_index; //next posible index in the key_value_store
 
 
 /*===============================================================================================*/
-static ssize_t device_file_read(struct file *file_ptr, char __user *user_buffer, size_t count, loff_t *possition)
+static ssize_t device_file_read(struct file *file_ptr, char __user *user_buffer,
+size_t count, loff_t *possition)
 {
-	struct key_value_pair *temp;
-	long index;
+	struct data *data;
 	size_t len;
 
-	index = key_exist(*possition);
-	printk(KERN_NOTICE "Simple-driver: Device file is read at offset = %i, read bytes count = %u\n", (int)*possition, (unsigned int)count);
-	if (index < 0)
+	if (*possition < 0)  // loff_t: long long, index of xarry is unsighed long, invalid offset return 0
 		return 0;
-	temp = key_value_store_read(index);
-	if (!temp->size)
+	data = xa_load(&key_value_store, *possition);
+	if (xa_is_err(data)) {   // xa_is_err is ture if any op in xarray failed
+		printk(KERN_NOTICE " xa_load FAILED in read system call at offset = %lld, read bytes count = %zu\n", *possition, count);
+		return -1;
+	}
+
+	if (!data) // date point to null,no data in this possition
 		return 0;
-	len = min(count, temp->size);
-	if (copy_to_user(user_buffer, temp->value, len))
+	len = min(data->size, count);
+	if (copy_to_user(user_buffer, data->value, len))
 		return -EFAULT;
-	*possition += count;
+	*possition += len;
 	return len;
 }
 
@@ -54,51 +56,61 @@ static ssize_t device_file_read(struct file *file_ptr, char __user *user_buffer,
 /*if key"position" is exist in xarray, change the value of this key value pair
  *if key "position" doesm't exist in xarray, create a new key value paire in it
  */
-static ssize_t device_file_write(struct file *file_ptr, const char __user *user_buffer, size_t count, loff_t *possition)
+static ssize_t device_file_write(struct file *file_ptr, const char __user *user_buffer,
+size_t count, loff_t *possition)
 {
-	long index;
-	char *kernel_buffer;
-	struct key_value_pair *pair;
-
-	printk(KERN_NOTICE "Simple-driver: key_value_store_store() is called.\n");
-	index = key_exist(*possition);
-	kernel_buffer = kmalloc(count, GFP_KERNEL);
-	if (!kernel_buffer)
-		printk(KERN_NOTICE "Simple-driver: allocated memory for kernel buffer failed.\n");
-	if (copy_from_user(kernel_buffer, user_buffer, count)) {
-		kfree(kernel_buffer);
+	struct data *data;
+	// loff_t: long long, index of xarry is unsighed long, invalid offset return 0
+	if (*possition < 0)
+		return -1;
+	// allocate memory for struct "data"
+	data = kmalloc(sizeof(struct data) + sizeof(size_t), GFP_KERNEL);
+	// kmalloc faied if it return null pointer
+	if (!data)
+		return -ENOMEM;
+	//get data from user space
+	if (copy_from_user(data->value, user_buffer, count))
 		return -EFAULT;
+	data->size = count;
+	//store data at xarray,xa_is_err is ture, if xa_store failed
+	if (xa_is_err(xa_store(&key_value_store, *possition, data, GFP_KERNEL))) {
+		printk(KERN_NOTICE " xa_store FAILED in device_file_write at offset = %lld, write bytes count = %zu\n", *possition, count);
+		return -1;
 	}
-	pair = kmalloc(sizeof(struct key_value_pair), GFP_KERNEL);
-	pair->key = *possition;
-	pair->value = kernel_buffer;
-	pair->size = count;
-	if (!key_value_store_save(pair, index)) {
-		printk(KERN_NOTICE "Simple-driver: stored data to store failed.\n");
-		return -EFAULT;
-	}
+	//update the offset und return the amount of input data
 	*possition += count;
+	if (*possition > max_offset) {
+		mutex_lock(&my_mutex);
+		max_offset = *possition;  // track the end of the file
+		mutex_unlock(&my_mutex);
+	}
 	return count;
 }
 
 
-static loff_t device_file_llseek(struct file *file_ptr, loff_t new_off, int mod)
+
+static loff_t device_file_llseek(struct file *file_ptr, loff_t new_off, int whence)
 {
+	//struct scull_dev *dev = filp->private_data;
+	loff_t newpos;
 
-	long index;
-
-	index = key_exist(new_off);
-	//alocate a new key in key value store
-	if (index < 0) {
-		if (!update_key(index, new_off)) {
-			file_ptr->f_pos = new_off;
-			return new_off;
-		}
-		return -EFAULT;
+	switch (whence) {
+	case 0: /* SEEK_SET */
+		newpos = new_off;
+		break;
+	case 1: /* SEEK_CUR */
+		newpos = file_ptr->f_pos + new_off;
+		break;
+	case 2: /* SEEK_END */
+		newpos = max_offset + new_off;
+		break;
+	default: /* can't happen */
+		return -EINVAL;
 	}
-    //update a key in store,return old key
-	file_ptr->f_pos = new_off;
-	return update_key(index, new_off);
+	if (newpos < 0)
+		return -EINVAL;
+	file_ptr->f_pos = newpos;
+	return newpos;
 }
 
 /*===============================================================================================*/
@@ -123,78 +135,78 @@ void key_value_store_init(struct xarray *array)
  * if key exist ,return the index
  * if key not exist ,return -1
  */
-long  key_exist(loff_t key)
-{
-	unsigned long index;
-	struct key_value_pair *entry;
+// long  key_exist(loff_t key)
+// {
+// 	unsigned long index;
+// 	struct key_value_pair *entry;
 
-	if (xa_empty(&key_value_store))
-		return -1;
-	xa_for_each(&key_value_store, index, entry) {
-		if (entry == NULL)
-			continue;
-		else if (entry->key == key)
-			return index;
-	}
-	return -1;
-}
+// 	if (xa_empty(&key_value_store))
+// 		return -1;
+// 	xa_for_each(&key_value_store, index, entry) {
+// 		if (entry == NULL)
+// 			continue;
+// 		else if (entry->key == key)
+// 			return index;
+// 	}
+// 	return -1;
+// }
 
 // return 0: no error or return a negative errno
-int key_value_store_save(struct key_value_pair *pair, long index)
-{
-	int err;
-    // storie a new entry in the key value store
-	if (index < 0) {
-		xa_lock_bh(&key_value_store);
-		err = xa_err(__xa_store(&key_value_store, next_index, pair, GFP_KERNEL));
-		if (!err) {
-			next_index++;
-			xa_unlock_bh(&key_value_store);
-		}
-		return err; //A negative errno or 0
-	}
-	//change the already exist key-value in the store
-	xa_store(&key_value_store, index, pair, GFP_KERNEL);
-	return 0;
-}
+// int key_value_store_save(struct key_value_pair *pair, long index)
+// {
+// 	int err;
+//     // storie a new entry in the key value store
+// 	if (index < 0) {
+// 		xa_lock_bh(&key_value_store);
+// 		err = xa_err(__xa_store(&key_value_store, next_index, pair, GFP_KERNEL));
+// 		if (!err) {
+// 			next_index++;
+// 			xa_unlock_bh(&key_value_store);
+// 		}
+// 		return err; //A negative errno or 0
+// 	}
+// 	//change the already exist key-value in the store
+// 	xa_store(&key_value_store, index, pair, GFP_KERNEL);
+// 	return 0;
+// }
 
 
 // notice : the  retured key_value_pair may contain a null char* value
-struct key_value_pair *key_value_store_read(long index)
-{
-	return xa_load(&key_value_store, index);
-}
+// struct key_value_pair *key_value_store_read(long index)
+// {
+// 	return xa_load(&key_value_store, index);
+// }
 
 
-loff_t update_key(long index, loff_t key)
-{
-	int err;
-	struct key_value_pair *p;
-	struct key_value_pair *temp;
-	loff_t old_key;
+// loff_t update_key(long index, loff_t key)
+// {
+// 	int err;
+// 	struct key_value_pair *p;
+// 	struct key_value_pair *temp;
+// 	loff_t old_key;
 
-	if (index < 0) {
-	//create a new key in key vlaue store
-		p = kmalloc(sizeof(struct key_value_pair), GFP_KERNEL);
-		p->key = key;
-		p->value = NULL;
-		p->size = 0;
-		xa_lock_bh(&key_value_store);
-		err = xa_err(__xa_store(&key_value_store, next_index, p, GFP_KERNEL));
-		if (!err) {
-			next_index++;
-			xa_unlock_bh(&key_value_store);
-			return key;
-		}
-		xa_unlock_bh(&key_value_store);
-		return 0; //error 0 or key
-	}
-	// update the key in the key value store
-	temp = xa_load(&key_value_store, index);
-	old_key = temp->key;
-	temp->key = key;
-	return old_key;
-}
+// 	if (index < 0) {
+// 	//create a new key in key vlaue store
+// 		p = kmalloc(sizeof(struct key_value_pair), GFP_KERNEL);
+// 		p->key = key;
+// 		p->value = NULL;
+// 		p->size = 0;
+// 		xa_lock_bh(&key_value_store);
+// 		err = xa_err(__xa_store(&key_value_store, next_index, p, GFP_KERNEL));
+// 		if (!err) {
+// 			next_index++;
+// 			xa_unlock_bh(&key_value_store);
+// 			return key;
+// 		}
+// 		xa_unlock_bh(&key_value_store);
+// 		return 0; //error 0 or key
+// 	}
+// 	// update the key in the key value store
+// 	temp = xa_load(&key_value_store, index);
+// 	old_key = temp->key;
+// 	temp->key = key;
+// 	return old_key;
+// }
 
 void key_value_store__exit(void)
 {
@@ -205,11 +217,9 @@ void key_value_store__exit(void)
 	xa_for_each(&key_value_store, index, entry) {
 		if (entry == NULL)
 			continue;
-		kfree(entry->value);
 		kfree(entry);
 		__xa_erase(&key_value_store, index);
 	}
-	next_index = 0;
 	xa_unlock(&key_value_store);
 }
 
@@ -248,6 +258,7 @@ int register_device(void)
 		pr_info("Cannot create the Device 1\n");
 		goto r_device;
 	}
+	mutex_init(&my_mutex);
 	key_value_store_init(&key_value_store);
 	pr_info("Device Driver Insert...Done!!!\n");
 	return 0;
