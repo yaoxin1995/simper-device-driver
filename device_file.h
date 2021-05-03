@@ -4,8 +4,8 @@
 #include <linux/xarray.h>
 
 static struct data{
-char value[0];
 size_t size;
+char value[0];
 };
 
 

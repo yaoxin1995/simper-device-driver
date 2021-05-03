@@ -1,0 +1,1 @@
+cmd_/home/yaoxin/kernelDep/simpleDeviceDriver/simple-module.o := ld -m elf_x86_64   -r -o /home/yaoxin/kernelDep/simpleDeviceDriver/simple-module.o /home/yaoxin/kernelDep/simpleDeviceDriver/main.o /home/yaoxin/kernelDep/simpleDeviceDriver/device_file.o

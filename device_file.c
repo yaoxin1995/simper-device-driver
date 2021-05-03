@@ -45,6 +45,7 @@ size_t count, loff_t *possition)
 	if (!data) // date point to null,no data in this possition
 		return 0;
 	len = min(data->size, count);
+	printk(KERN_NOTICE "read value=%s, offset = %lld, read bytes count = %zu\n", data->value, *possition, count);
 	if (copy_to_user(user_buffer, data->value, len))
 		return -EFAULT;
 	*possition += len;
@@ -77,6 +78,7 @@ size_t count, loff_t *possition)
 		printk(KERN_NOTICE " xa_store FAILED in device_file_write at offset = %lld, write bytes count = %zu\n", *possition, count);
 		return -1;
 	}
+	printk(KERN_NOTICE "write value=%s, offset = %lld, write bytes count = %zu\n", data->value, *possition, count);
 	//update the offset und return the amount of input data
 	*possition += count;
 	if (*possition > max_offset) {
@@ -128,85 +130,9 @@ static const char device_name[] = "Simple-driver";
 
 void key_value_store_init(struct xarray *array)
 {
-        xa_init_flags(array, XA_FLAGS_LOCK_BH);// Initialise an empty XArray with flags.
+	xa_init_flags(array, XA_FLAGS_LOCK_BH);// Initialise an empty XArray with flags.
 }
 
-/* checke the key "offset" is exist in the key value store
- * if key exist ,return the index
- * if key not exist ,return -1
- */
-// long  key_exist(loff_t key)
-// {
-// 	unsigned long index;
-// 	struct key_value_pair *entry;
-
-// 	if (xa_empty(&key_value_store))
-// 		return -1;
-// 	xa_for_each(&key_value_store, index, entry) {
-// 		if (entry == NULL)
-// 			continue;
-// 		else if (entry->key == key)
-// 			return index;
-// 	}
-// 	return -1;
-// }
-
-// return 0: no error or return a negative errno
-// int key_value_store_save(struct key_value_pair *pair, long index)
-// {
-// 	int err;
-//     // storie a new entry in the key value store
-// 	if (index < 0) {
-// 		xa_lock_bh(&key_value_store);
-// 		err = xa_err(__xa_store(&key_value_store, next_index, pair, GFP_KERNEL));
-// 		if (!err) {
-// 			next_index++;
-// 			xa_unlock_bh(&key_value_store);
-// 		}
-// 		return err; //A negative errno or 0
-// 	}
-// 	//change the already exist key-value in the store
-// 	xa_store(&key_value_store, index, pair, GFP_KERNEL);
-// 	return 0;
-// }
-
-
-// notice : the  retured key_value_pair may contain a null char* value
-// struct key_value_pair *key_value_store_read(long index)
-// {
-// 	return xa_load(&key_value_store, index);
-// }
-
-
-// loff_t update_key(long index, loff_t key)
-// {
-// 	int err;
-// 	struct key_value_pair *p;
-// 	struct key_value_pair *temp;
-// 	loff_t old_key;
-
-// 	if (index < 0) {
-// 	//create a new key in key vlaue store
-// 		p = kmalloc(sizeof(struct key_value_pair), GFP_KERNEL);
-// 		p->key = key;
-// 		p->value = NULL;
-// 		p->size = 0;
-// 		xa_lock_bh(&key_value_store);
-// 		err = xa_err(__xa_store(&key_value_store, next_index, p, GFP_KERNEL));
-// 		if (!err) {
-// 			next_index++;
-// 			xa_unlock_bh(&key_value_store);
-// 			return key;
-// 		}
-// 		xa_unlock_bh(&key_value_store);
-// 		return 0; //error 0 or key
-// 	}
-// 	// update the key in the key value store
-// 	temp = xa_load(&key_value_store, index);
-// 	old_key = temp->key;
-// 	temp->key = key;
-// 	return old_key;
-// }
 
 void key_value_store__exit(void)
 {
